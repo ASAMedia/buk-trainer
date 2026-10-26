@@ -1,5 +1,5 @@
 // Seite: erst Netz (Updates kommen sofort an), sonst Cache. MathJax und Schriften: einmal laden, dann aus dem Cache.
-const CACHE = "buk-1013ee816d";
+const CACHE = "buk-10bd843c5d";
 const CORE = ["./", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", (e) => {
