@@ -248,6 +248,21 @@ svg.graph .gn:focus-visible circle { stroke: var(--accent); stroke-width: 3; }
 .mnc { border: 1px solid var(--line); border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px; min-height: 64px; background: var(--paper); }
 .mnc.target { border: 2px dashed var(--accent); background: var(--accent-soft); cursor: pointer; }
 
+/* Übungsblatt 1 */
+details.theory { background: var(--accent-soft); border-color: var(--accent); }
+details.theory .answer { margin-top: 6px; line-height: 1.55; }
+.proprow { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.proprow .row.spread { flex-wrap: wrap; }
+table.rel td { min-width: 34px; height: 30px; font-size: 16px; }
+table.rel td.on { color: var(--accent); }
+table.rel td.cell { cursor: pointer; }
+table.rel td.add { background: var(--head); color: var(--head-ink); font-weight: 700; }
+table.calc th { text-align: left; white-space: nowrap; }
+table.calc td { text-align: left; white-space: normal; word-break: break-word; }
+.chip.wordchip.in { background: var(--ok-soft); border-color: var(--ok); }
+.chip.wordchip.out { background: var(--bad-soft); border-color: var(--bad); }
+textarea.gram { min-height: 96px; font-size: 15px; }
+
 </style>
 <script>
 window.MathJax = {
@@ -631,10 +646,12 @@ function tapBar(sel, label, extra, cancel) {
 }
 
 const GROUPS = [
+  ["Übungsblätter · WS 26/27", ["blatt1"]],
+  ["Kap. 1–2 · Grundlagen, Grammatiken", ["gram", "sortlang"]],
   ["Kap. 3–4 · Endliche Automaten", ["dfa", "nfa", "min", "mn", "plreg"]],
   ["Kap. 5 · Kontextfreie Sprachen", ["pda", "cyk", "plcf"]],
   ["Kap. 6–7 · Berechenbarkeit", ["tm", "red", "sortcomp"]],
-  ["Kap. 2, 8–9 · Grammatiken, Laufzeit, Komplexität", ["master", "landau", "redp", "sortlang"]],
+  ["Kap. 8–9 · Laufzeit, Komplexität", ["master", "landau", "redp"]],
   ["Alle Kapitel · Prüfung", ["sim", "oral", "beweis"]],
 ];
 
@@ -2651,7 +2668,7 @@ function renderSteps(view, key, R) {
       if (solved != null) after.append(fb("ok", "Richtig", h("p", { class: "answer", html: st.o[solved].why })), next);
       else if (wrong.length) after.append(fb("bad", "Nicht ganz", h("p", { class: "answer", html: st.o[wrong[wrong.length - 1]].why })));
     } else {
-      st.widget(card, { data: S.wdata[i] || (S.wdata[i] = {}), solved: !!S.solved[i], fail: () => { S.miss++; }, solve: () => { S.solved[i] = true; draw(); } });
+      st.widget(card, { data: S.wdata[i] || (S.wdata[i] = {}), solved: !!S.solved[i], fail: () => { S.miss++; }, solve: () => { S.solved[i] = true; draw(); }, redraw: () => draw() });
       if (S.solved[i]) after.append(fb("ok", "Richtig", st.why ? h("p", { class: "answer", html: st.why }) : null), next);
     }
     card.append(after);
@@ -3245,6 +3262,571 @@ App.register({
 });
 
 "use strict";
+/* Übungsblatt 1 (WS 26/27): Relationen, Sprachpotenzen, Konkatenation, Quantoren, Ableitungen, Grammatik bauen.
+   Erst die Zahlen vom Blatt, danach neue Beispiele. Oben je Aufgabe die Theorie (eingeklappt); geprüft wird exakt. */
+
+const b1Drafts = {};
+const theory = (html) => h("details", { class: "theory" }, h("summary", null, "Theorie dazu"), h("div", { class: "answer small", html }));
+const byLL = (a, b) => a.length - b.length || (a < b ? -1 : a > b ? 1 : 0);
+const SUPD = "⁰¹²³⁴⁵⁶⁷⁸⁹";
+const fromSup = (s) => +[...s].map((d) => SUPD.indexOf(d)).join("");
+/* „aa, a^3, a³, (ab)^2, ε“ → Wortmenge */
+function parseWords(s) {
+  const out = new Set();
+  for (let tok of String(s).replace(/[{}]/g, " ").split(/[\s,;]+/)) {
+    if (!tok) continue;
+    if (/^(ε|eps|epsilon)$/i.test(tok)) { out.add(""); continue; }
+    tok = tok.replace(/\(([a-z]+)\)\^(\d+)/g, (_, w, n) => w.repeat(+n)).replace(/\(([a-z]+)\)([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (_, w, n) => w.repeat(fromSup(n)))
+      .replace(/([a-z])\^(\d+)/g, (_, c, n) => c.repeat(+n)).replace(/([a-z])([⁰¹²³⁴⁵⁶⁷⁸⁹]+)/g, (_, c, n) => c.repeat(fromSup(n)));
+    out.add(tok);
+  }
+  return [...out];
+}
+const fmtSet = (ws) => (ws.length ? "{" + [...ws].sort(byLL).map(W).join(", ") + "}" : "∅");
+const concatL = (A, B) => [...new Set(A.flatMap((x) => B.map((y) => x + y)))];
+const powL = (L, n) => { let P = [""]; for (let i = 0; i < n; i++) P = concatL(P, L); return P; };
+const setEq = (A, B) => A.length === B.length && A.every((x) => B.includes(x));
+
+/* ------------------------------------------------------------------ Relationen */
+const pk = (x, y) => x + "," + y;
+const pairs2 = (R) => [...R].map((k) => k.split(",").map(Number));
+function relProps(M, R) {      // null = erfüllt, sonst ein Gegenbeispiel
+  const has = (x, y) => R.has(pk(x, y)), P = pairs2(R).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let trans = null;
+  for (const [x, y] of P) for (const [y2, z] of P) if (!trans && y === y2 && !has(x, z)) trans = [x, y, z];
+  return { refl: M.find((x) => !has(x, x)) ?? null, sym: P.find(([x, y]) => !has(y, x)) || null, anti: P.find(([x, y]) => x !== y && has(y, x)) || null, trans };
+}
+function eqClosure(M, R) {
+  const up = Object.fromEntries(M.map((x) => [x, x]));
+  const f = (x) => (up[x] === x ? x : (up[x] = f(up[x])));
+  for (const [x, y] of pairs2(R)) up[f(x)] = f(y);
+  const set = new Set();
+  for (const x of M) for (const y of M) if (f(x) === f(y)) set.add(pk(x, y));
+  const cls = [];
+  for (const x of M) { const c = cls.find((k) => f(k[0]) === f(x)); if (c) c.push(x); else cls.push([x]); }
+  return { set, cls };
+}
+function randomRelation() {
+  const M = [1, 2, 3, 4], R = new Set(), kind = pick(["eq", "ord", "mix"]);
+  if (kind === "eq") { const cls = shuffle([...M]).reduce((acc, x) => { if (!acc.length || Math.random() < 0.45) acc.push([x]); else pick(acc).push(x); return acc; }, []); for (const c of cls) for (const x of c) for (const y of c) R.add(pk(x, y)); }
+  else if (kind === "ord") { const p = shuffle([...M]); p.forEach((x, i) => p.slice(i).forEach((y) => R.add(pk(x, y)))); }
+  else for (const x of M) for (const y of M) if (x === y ? Math.random() < 0.8 : Math.random() < 0.3) R.add(pk(x, y));
+  for (let i = Math.floor(Math.random() * 3); i > 0; i--) { const k = pk(pick(M), pick(M)); if (R.has(k)) R.delete(k); else R.add(k); }
+  return { M, R: [...R] };
+}
+const relMatrix = (M, R, cell) => h("div", { class: "scroll" }, h("table", { class: "ed rel" },
+  h("tr", null, h("th", null, "x \\ y"), M.map((y) => h("th", null, String(y)))),
+  M.map((x) => h("tr", null, h("th", null, String(x)), M.map((y) => cell(x, y))))));
+const pairTxt = (p) => "(" + p.join(",") + ")";
+const PROPS = [
+  ["refl", "reflexiv", "∀x: (x, x) ∈ R"], ["sym", "symmetrisch", "(x, y) ∈ R ⇒ (y, x) ∈ R"],
+  ["anti", "antisymmetrisch", "(x, y), (y, x) ∈ R ⇒ x = y"], ["trans", "transitiv", "(x, y), (y, z) ∈ R ⇒ (x, z) ∈ R"]];
+const T_REL = "<b>Relation</b> R ⊆ M × M. <b>reflexiv</b>: ∀x ∈ M: (x,x) ∈ R. <b>symmetrisch</b>: (x,y) ∈ R ⇒ (y,x) ∈ R. <b>antisymmetrisch</b>: (x,y) ∈ R ∧ (y,x) ∈ R ⇒ x = y. <b>transitiv</b>: (x,y), (y,z) ∈ R ⇒ (x,z) ∈ R.<br><b>Äquivalenzrelation</b> = reflexiv + symmetrisch + transitiv. <b>Halbordnung</b> (Ordnungsrelation) = reflexiv + antisymmetrisch + transitiv; <b>linear</b>, wenn zusätzlich je zwei Elemente vergleichbar sind.<br>Alle Eigenschaften sind Für-alle-Aussagen: Zum Widerlegen genügt <i>ein</i> Gegenbeispiel, zum Bestätigen prüft man alle Fälle.";
+
+function relTask(view, t) {
+  const blatt = { M: [1, 2, 3, 4], R: ["1,2", "3,3", "3,2", "2,2", "2,1", "4,4", "2,3", "1,1"] };
+  const S = b1Drafts.rel || (b1Drafts.rel = { inst: blatt, n: 0, ans: {} });
+  const M = S.inst.M, R = new Set(S.inst.R), truth = relProps(M, R), P = pairs2(R).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const out = h("div", { class: "stack" }), box = h("div", { class: "stack" });
+  const pairOpts = (filter) => P.filter(filter).map(pairTxt);
+  const draw = () => {
+    box.replaceChildren(...PROPS.map(([id, name, def]) => {
+      const a = S.ans[id] || (S.ans[id] = { ok: null, w: [] });
+      const set = (v) => { a.ok = v; draw(); };
+      let wit = null;
+      if (a.ok === false) {
+        const s = (opts, i, label) => { const e = h("select", { "aria-label": label, onchange: (ev) => { a.w[i] = ev.target.value; } }, h("option", { value: "" }, "…"), opts.map((o) => h("option", { value: o }, o))); e.value = a.w[i] || ""; return e; };
+        wit = h("div", { class: "row small" }, "Gegenbeispiel:",
+          id === "refl" ? [s(M.map(String), 0, "x"), " mit (x, x) ∉ R"]
+            : id === "sym" ? [s(pairOpts(() => true), 0, "Paar"), " ∈ R, aber umgekehrt nicht"]
+              : id === "anti" ? [s(pairOpts(([x, y]) => x !== y), 0, "Paar"), " und das umgekehrte Paar liegen beide in R"]
+                : [s(pairOpts(() => true), 0, "erstes Paar"), s(pairOpts(() => true), 1, "zweites Paar"), " ∈ R, die Abkürzung fehlt"]);
+      }
+      return h("div", { class: "proprow" }, h("div", { class: "row spread" }, h("span", null, h("b", null, name), h("span", { class: "small muted" }, "  " + def)),
+        h("div", { class: "row" }, h("button", { class: "chip" + (a.ok === true ? " on" : ""), type: "button", onclick: () => set(true) }, "erfüllt"),
+          h("button", { class: "chip" + (a.ok === false ? " on" : ""), type: "button", onclick: () => set(false) }, "nicht erfüllt"))), wit);
+    }),
+    h("div", { class: "row" }, h("b", null, "Also ist R:"), [["aequi", "Äquivalenzrelation"], ["halb", "Halbordnung"], ["keins", "keins von beiden"]].map(([k, l]) =>
+      h("button", { class: "chip" + (S.ans.typ === k ? " on" : ""), type: "button", onclick: () => { S.ans.typ = k; draw(); } }, l))));
+  };
+  const check = () => {
+    out.replaceChildren();
+    const has = (x, y) => R.has(pk(x, y)), errs = [];
+    const okText = { refl: "alle (x, x) mit x ∈ M sind enthalten.", sym: "zu jedem (x, y) ∈ R liegt auch (y, x) in R.", anti: "es gibt kein Paar (x, y), (y, x) in R mit x ≠ y.", trans: "zu jeder Kette (x, y), (y, z) liegt auch (x, z) in R." };
+    const noText = { refl: (x) => "(" + x + "," + x + ") ∉ R.", sym: ([x, y]) => pairTxt([x, y]) + " ∈ R, aber " + pairTxt([y, x]) + " ∉ R.", anti: ([x, y]) => pairTxt([x, y]) + " und " + pairTxt([y, x]) + " ∈ R, aber " + x + " ≠ " + y + ".", trans: ([x, y, z]) => pairTxt([x, y]) + ", " + pairTxt([y, z]) + " ∈ R, aber " + pairTxt([x, z]) + " ∉ R." };
+    for (const [id, name] of PROPS) {
+      const a = S.ans[id] || {}, is = truth[id] == null;
+      if (a.ok == null) { errs.push(name + ": noch nicht entschieden."); continue; }
+      if (a.ok && !is) { errs.push(name + " stimmt nicht: " + noText[id](truth[id])); continue; }
+      if (!a.ok && is) { errs.push(name + " ist erfüllt: " + okText[id]); continue; }
+      if (!a.ok) {
+        const p = (s) => (s ? s.slice(1, -1).split(",").map(Number) : null), w0 = a.w[0], w1 = a.w[1];
+        let valid = false;
+        if (id === "refl") valid = w0 && !has(+w0, +w0);
+        else if (id === "sym") { const q = p(w0); valid = q && !has(q[1], q[0]); }
+        else if (id === "anti") { const q = p(w0); valid = q && q[0] !== q[1] && has(q[1], q[0]); }
+        else { const q = p(w0), r = p(w1); valid = q && r && q[1] === r[0] && !has(q[0], r[1]); }
+        if (!valid) errs.push(name + ": Dein Gegenbeispiel passt nicht" + (w0 ? "" : " (noch keins gewählt)") + ". Eins, das passt: " + noText[id](truth[id]));
+      }
+    }
+    const isEq = truth.refl == null && truth.sym == null && truth.trans == null, isHalb = truth.refl == null && truth.anti == null && truth.trans == null;
+    const typOk = S.ans.typ === "aequi" ? isEq : S.ans.typ === "halb" ? isHalb : S.ans.typ === "keins" ? !isEq && !isHalb : false;
+    if (!errs.length && !typOk) errs.push(S.ans.typ ? "Die Einordnung passt nicht zu den Eigenschaften: Äquivalenzrelation = reflexiv + symmetrisch + transitiv, Halbordnung = reflexiv + antisymmetrisch + transitiv." : "Ordne R noch ein.");
+    if (errs.length) { Progress.record("blatt1:rel", false); out.append(fb("bad", "Noch nicht ganz", h("ul", null, errs.map((e) => h("li", null, e))))); return; }
+    Progress.record("blatt1:rel", true);
+    out.append(fb("ok", "Alles richtig!", h("p", null, S.n === 0 ? "Das ist genau Teil 1 von Blatt 1, A1. In der Abgabe: jede Eigenschaft mit ✓/× und bei × das konkrete Gegenbeispiel." : "Alle Eigenschaften und Gegenbeispiele stimmen.")));
+  };
+  view.append(theory(T_REL),
+    h("div", { class: "card task" }, h("div", { class: "eyebrow" }, S.n === 0 ? "Blatt 1 · A1 (1)" : "Neue Relation " + S.n),
+      h("p", { class: "answer" }, "M = {" + M.join(", ") + "}, R = {" + P.map(pairTxt).join(", ") + "}"),
+      relMatrix(M, R, (x, y) => h("td", { class: R.has(pk(x, y)) ? "on" : "" }, R.has(pk(x, y)) ? "●" : "")),
+      h("p", { class: "small muted" }, "Zeile x, Spalte y: ● heißt (x, y) ∈ R.")),
+    h("div", { class: "card task" }, box),
+    h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: check }, "Prüfen"),
+      h("button", { class: "btn ghost", type: "button", onclick: () => { b1Drafts.rel = { inst: randomRelation(), n: S.n + 1, ans: {} }; App.render(); } }, "Neue Relation")), out);
+  draw();
+}
+
+function hullTask(view, t) {
+  const blatt = { M: [1, 2, 3, 4], R: ["1,2", "3,3", "3,2", "2,2", "2,1", "4,4", "2,3", "1,1"] };
+  const fresh = (inst, n) => ({ inst, n, add: [] });
+  const S = b1Drafts.hull || (b1Drafts.hull = fresh(blatt, 0));
+  const M = S.inst.M, R = new Set(S.inst.R), clo = eqClosure(M, R);
+  const out = h("div", { class: "stack" }), mat = h("div");
+  const draw = () => mat.replaceChildren(relMatrix(M, R, (x, y) => {
+    const k = pk(x, y), base = R.has(k), on = S.add.includes(k);
+    return h("td", { class: "cell" + (base ? " on" : on ? " add" : ""), role: base ? null : "button", "aria-label": "(" + x + "," + y + ")",
+      onclick: base ? null : () => { S.add = on ? S.add.filter((z) => z !== k) : [...S.add, k]; out.replaceChildren(); draw(); } }, base ? "●" : on ? "+" : "");
+  }), h("p", { class: "small muted" }, "● gegeben, + von dir ergänzt (" + S.add.length + " Paar" + (S.add.length === 1 ? "" : "e") + "). Leere Zelle antippen = Paar hinzufügen."));
+  const why = (k) => {
+    const [x, y] = k.split(",").map(Number);
+    if (x === y) return pairTxt([x, y]) + ": Reflexivität.";
+    if (R.has(pk(y, x))) return pairTxt([x, y]) + ": Symmetrie, weil " + pairTxt([y, x]) + " ∈ R.";
+    const z = M.find((m) => clo.set.has(pk(x, m)) && clo.set.has(pk(m, y)) && (R.has(pk(x, m)) || R.has(pk(m, x))) && m !== x && m !== y);
+    return pairTxt([x, y]) + ": Transitivität" + (z ? ", über " + pairTxt([x, z]) + " und " + pairTxt([z, y]) : "") + ".";
+  };
+  const check = () => {
+    out.replaceChildren();
+    const U = new Set([...R, ...S.add]), pr = relProps(M, U);
+    if (pr.refl != null || pr.sym || pr.trans) {
+      Progress.record("blatt1:hull", false);
+      const e = pr.refl != null ? "nicht reflexiv: (" + pr.refl + "," + pr.refl + ") fehlt." : pr.sym ? "nicht symmetrisch: " + pairTxt(pr.sym) + " ist drin, " + pairTxt([pr.sym[1], pr.sym[0]]) + " fehlt." : "nicht transitiv: " + pairTxt([pr.trans[0], pr.trans[1]]) + " und " + pairTxt([pr.trans[1], pr.trans[2]]) + " sind drin, " + pairTxt([pr.trans[0], pr.trans[2]]) + " fehlt.";
+      out.append(fb("bad", "Noch keine Äquivalenzrelation", h("p", null, "Sie ist " + e)));
+      return;
+    }
+    const extra = S.add.filter((k) => !clo.set.has(k));
+    if (extra.length) {
+      Progress.record("blatt1:hull", false);
+      out.append(fb("info", "Äquivalenzrelation ja – aber nicht minimal", h("p", null, extra.map((k) => pairTxt(k.split(","))).join(", ") + (extra.length > 1 ? " werden" : " wird") + " von keinem Axiom erzwungen. Nimm " + (extra.length > 1 ? "sie" : "es") + " wieder heraus.")));
+      return;
+    }
+    Progress.record("blatt1:hull", true);
+    out.append(fb("ok", "Minimal ergänzt!", h("p", null, "Klassen: " + clo.cls.map((c) => "{" + c.join(", ") + "}").join(", ") + ". Jedes neue Paar ist erzwungen:"),
+      S.add.length ? h("ul", null, [...S.add].sort().map((k) => h("li", null, why(k)))) : h("p", null, "R war schon eine Äquivalenzrelation."),
+      h("p", { class: "small" }, "Darum reichen weniger Paare nicht: Jede Äquivalenzrelation, die R enthält, muss diese Paare enthalten (transitive Hülle).")));
+  };
+  draw();
+  view.append(theory(T_REL + "<br><b>Ergänzen zur Äquivalenzrelation:</b> Elemente, die über Paare verbunden sind, landen in derselben Klasse; innerhalb einer Klasse steht jedes Element mit jedem in Relation. Minimal heißt: nur Paare, die Reflexivität, Symmetrie oder Transitivität erzwingen."),
+    h("div", { class: "card task" }, h("div", { class: "eyebrow" }, S.n === 0 ? "Blatt 1 · A1 (2)" : "Neue Relation " + S.n),
+      h("p", { class: "answer" }, "M = {" + M.join(", ") + "}, R = {" + pairs2(R).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(pairTxt).join(", ") + "}"),
+      h("p", null, "Füge so wenige Paare wie möglich hinzu, sodass eine Äquivalenzrelation entsteht."), mat),
+    h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: check }, "Prüfen"),
+      h("button", { class: "btn ghost", type: "button", onclick: () => {
+        let inst; do { inst = randomRelation(); } while (eqClosure(inst.M, new Set(inst.R)).set.size === new Set(inst.R).size);
+        b1Drafts.hull = fresh(inst, S.n + 1); App.render();
+      } }, "Neue Relation")), out);
+}
+
+/* ------------------------------------------------------------------ Sprachpotenzen */
+const POT = [
+  { L: ["a", "aa"], gen: "n + 1", desc: "Lⁿ = {aᵏ | n ≤ k ≤ 2n}" },
+  { L: ["a", "b"], gen: "2ⁿ", desc: "Kⁿ = {a, b}ⁿ, alle Wörter der Länge n" },
+  { L: ["", "a"], gen: "n + 1", desc: "Lⁿ = {ε, a, …, aⁿ}" },
+  { L: ["a", "aa", "aaa"], gen: "2n + 1", desc: "Lⁿ = {aᵏ | n ≤ k ≤ 3n}" },
+  { L: ["a", "ab"], gen: "2ⁿ", desc: "jedes Wort lässt sich eindeutig zerlegen: Jedes b gehört zum a davor" },
+  { L: ["ab", "b"], gen: "2ⁿ", desc: "präfixfrei: kein Wort ist Anfang eines anderen, also eindeutig zerlegbar" },
+];
+function collision(L, n) {        // zwei verschiedene Faktorfolgen mit gleichem Wort
+  const seen = new Map();
+  const rec = (seq) => {
+    if (seq.length === n) { const w = seq.join(""), k = seq.map(W).join(" · "); if (seen.has(w) && seen.get(w) !== k) return [seen.get(w), k, w]; seen.set(w, k); return null; }
+    for (const x of L) { const r = rec([...seq, x]); if (r) return r; }
+    return null;
+  };
+  return rec([]);
+}
+function potTask(view, t) {
+  const S = b1Drafts.pot || (b1Drafts.pot = { i: 0, step: 1, in2: "", in3: "", gen: null, msg: null });
+  const I = POT[S.i], L = I.L, name = S.i === 1 ? "K" : "L";
+  const L2 = powL(L, 2), L3 = powL(L, 3), coll = collision(L, 2) || collision(L, 3);
+  const root = h("div", { class: "stack" });
+  const done = (msg) => h("p", { class: "small ok-t" }, "✓ " + msg);
+  const bad = (title, text) => { Progress.record("blatt1:pot", false); S.msg = [title, text]; draw(); };
+  const step1 = () => {
+    const got = parseWords(S.in2), miss = L2.filter((w) => !got.includes(w)), extra = got.filter((w) => !L2.includes(w));
+    if (!miss.length && !extra.length) { S.step = 2; S.msg = null; draw(); return; }
+    bad("Noch nicht " + name + "²", (miss.length === 1 ? "Es fehlt ein Wort. " : miss.length ? "Es fehlen " + miss.length + " Wörter. " : "") + (extra.length ? "Nicht in " + name + "²: " + extra.map(W).join(", ") + ". " : "") + "Bilde alle Kombinationen x·y mit x, y ∈ " + name + " – gleiche Wörter zählen nur einmal.");
+  };
+  const step2 = () => {
+    if (S.in3 !== "" && +S.in3 === L3.length) { S.step = 3; S.msg = null; draw(); return; }
+    bad("Nicht ganz", "Zähle die verschiedenen Wörter in " + name + "³ = " + name + "² ∘ " + name + ". Es gibt " + L.length + "³ = " + L.length ** 3 + " Auswahlfolgen – aber vielleicht ergeben manche dasselbe Wort.");
+  };
+  const step3 = (g) => {
+    S.gen = g;
+    if (g !== I.gen) { bad("Nicht ganz", "Prüfe an n = 0, 1, 2, 3: |" + name + "ⁿ| = " + [0, 1, 2, 3].map((n) => powL(L, n).length).join(", ") + "."); return; }
+    Progress.record("blatt1:pot", true);
+    S.step = 4; S.msg = null; draw();
+  };
+  const draw = () => {
+    const inp2 = h("input", { type: "text", class: "word", value: S.in2, placeholder: "z. B. aa, aaa (a³ geht auch)", "aria-label": name + "²", oninput: (e) => { S.in2 = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Enter") step1(); } });
+    const inp3 = h("input", { type: "number", inputmode: "numeric", min: "0", style: "max-width:90px", value: S.in3, "aria-label": "|" + name + "³|", oninput: (e) => { S.in3 = e.target.value; },
+      onkeydown: (e) => { if (e.key === "Enter") step2(); } });
+    root.replaceChildren(
+      h("div", { class: "card task" }, h("div", { class: "eyebrow" }, S.i < 2 ? "Blatt 1 · A2" : "Neue Sprache " + (S.i - 1)), h("p", { class: "answer" }, name + " = " + fmtSet(L) + "  (|" + name + "| = " + L.length + ")")),
+      h("div", { class: "card task" }, h("b", null, "1. Bestimme " + name + "² = " + name + " ∘ " + name + "."),
+        S.step > 1 ? done(name + "² = " + fmtSet(L2)) : [inp2, h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: step1 }, "Prüfen"))]),
+      S.step >= 2 ? h("div", { class: "card task" }, h("b", null, "2. Wie viele Wörter hat " + name + "³?"),
+        S.step > 2 ? done("|" + name + "³| = " + L3.length + ": " + name + "³ = " + fmtSet(L3)) : h("div", { class: "row" }, inp3, h("button", { class: "btn primary", type: "button", onclick: step2 }, "Prüfen"))) : null,
+      S.step >= 3 ? h("div", { class: "card task" }, h("b", null, "3. Wie groß ist |" + name + "ⁿ| allgemein (n ∈ ℕ, ℕ mit 0)?"),
+        h("div", { class: "row" }, ["n + 1", "2n + 1", "2ⁿ", "3ⁿ"].map((g) => h("button", { class: "chip" + (S.gen === g ? " on" : ""), type: "button", disabled: S.step > 3, onclick: () => step3(g) }, g)))) : null,
+      S.msg ? fb("bad", S.msg[0], h("p", null, S.msg[1])) : null,
+      S.step >= 4 ? fb("ok", "Richtig: |" + name + "ⁿ| = " + I.gen, h("p", null, I.desc + "."),
+        h("p", null, coll ? "Weniger als " + L.length + "ⁿ, weil verschiedene Auswahlfolgen dasselbe Wort ergeben (Mehrfacherzeugung): " + coll[0] + " = " + coll[1] + " = " + W(coll[2]) + "."
+          : "Genau " + L.length + "ⁿ: Jede Auswahlfolge liefert ein anderes Wort, weil sich jedes Wort eindeutig in Faktoren aus " + name + " zerlegen lässt."),
+        S.i === 0 ? h("p", { class: "small" }, "Blatt 1, A2 (3) fragt nach K = {a, b}: Tippe „Nächste Sprache“.") : null) : null,
+      h("div", { class: "row" }, h("button", { class: "btn ghost", type: "button", onclick: () => { b1Drafts.pot = { i: (S.i + 1) % POT.length, step: 1, in2: "", in3: "", gen: null, msg: null }; App.render(); } }, "Nächste Sprache")));
+  };
+  view.append(theory("<b>Konkatenation</b> L₁ ∘ L₂ = {w₁w₂ | w₁ ∈ L₁, w₂ ∈ L₂}. <b>Potenzen</b>: L⁰ = {ε}, L<sup>i+1</sup> = L<sup>i</sup> ∘ L. Man bildet alle Kombinationen; weil das Ergebnis eine Menge ist, zählen gleiche Wörter nur einmal.<br>Immer gilt |Lⁿ| ≤ |L|ⁿ. Gleichheit genau dann, wenn jedes Wort aus Lⁿ eindeutig in n Faktoren aus L zerfällt – z. B. wenn L präfixfrei ist (kein Wort ist Anfang eines anderen)."), root);
+  draw();
+}
+
+/* ------------------------------------------------------------------ Gegenbeispiel-Labor */
+function konkTask(view, t) {
+  const S = b1Drafts.konk || (b1Drafts.konk = { A: "", B: "", C: "" });
+  const res = h("div", { class: "stack" }), out = h("div", { class: "stack" });
+  const field = (k) => h("label", { class: "fld" }, h("span", { class: "small muted" }, k + " ="), h("input", { type: "text", class: "word", value: S[k], placeholder: "z. B. ε, a", "aria-label": "Sprache " + k, oninput: (e) => { S[k] = e.target.value; calc(); } }));
+  const sides = () => {
+    const A = parseWords(S.A), B = parseWords(S.B), C = parseWords(S.C);
+    const BC = B.filter((x) => C.includes(x)), left = concatL(A, BC), AC = concatL(A, C), AB = concatL(A, B), right = AC.filter((x) => AB.includes(x));
+    return { A, B, C, BC, left, AC, AB, right };
+  };
+  const calc = () => {
+    const s = sides();
+    res.replaceChildren(h("table", { class: "ed calc" },
+      h("tr", null, h("th", null, "B ∩ C"), h("td", { class: "mono" }, fmtSet(s.BC))),
+      h("tr", null, h("th", null, "A ∘ (B ∩ C)"), h("td", { class: "mono" }, fmtSet(s.left))),
+      h("tr", null, h("th", null, "A ∘ C"), h("td", { class: "mono" }, fmtSet(s.AC))),
+      h("tr", null, h("th", null, "A ∘ B"), h("td", { class: "mono" }, fmtSet(s.AB))),
+      h("tr", null, h("th", null, "(A ∘ C) ∩ (A ∘ B)"), h("td", { class: "mono" }, fmtSet(s.right)))));
+  };
+  const check = () => {
+    out.replaceChildren();
+    const s = sides();
+    if (!S.A.trim() && !S.B.trim() && !S.C.trim()) { out.append(fb("info", "Erst A, B und C eintragen")); return; }
+    if (setEq(s.left, s.right)) {
+      Progress.record("blatt1:konk", false);
+      out.append(fb("bad", "Beide Seiten sind gleich", h("p", null, "Das ist noch kein Gegenbeispiel. Tipp: Mach B und C disjunkt – dann ist links ∅. Und sorge dafür, dass ein Wort auf zwei Arten entsteht: A mit Wörtern verschiedener Länge.")));
+      return;
+    }
+    Progress.record("blatt1:konk", true);
+    const w = s.right.find((x) => !s.left.includes(x));
+    const dec = (L2) => { for (const x of s.A) for (const y of L2) if (x + y === w) return W(x) + " · " + W(y); return ""; };
+    out.append(fb("ok", "Gegenbeispiel gefunden!", h("p", null, "„" + W(w) + "“ liegt rechts, aber nicht links: " + W(w) + " = " + dec(s.B) + " (A ∘ B) und " + W(w) + " = " + dec(s.C) + " (A ∘ C) – zwei verschiedene Zerlegungen, aber kein gemeinsames Endstück in B ∩ C."),
+      h("p", { class: "small" }, "Merke: ⊆ gilt immer. ⊇ scheitert, weil ∃ sich nicht über ∧ verteilt. Die Musterlösung von Blatt 1 nimmt A = {ε, a}, B = {a}, C = {aa}; ohne ε geht A = {a, aa}, B = {aa}, C = {a}.")));
+  };
+  view.append(theory("<b>Mengengleichheit zeigen</b>: Äquivalenzkette für ein beliebiges Wort w oder beide Inklusionen ⊆ und ⊇.<br><b>„Gilt im Allgemeinen nicht“ zeigen</b>: <i>ein</i> konkretes Gegenbeispiel genügt; beide Seiten explizit ausrechnen.<br>A ∘ ∅ = ∅, A ∘ {ε} = A."),
+    h("div", { class: "card task" }, h("div", { class: "eyebrow" }, "Blatt 1 · A3 (2)"),
+      h("p", { class: "answer" }, "Finde Sprachen A, B, C über {a, b} mit A ∘ (B ∩ C) ≠ (A ∘ C) ∩ (A ∘ B)."),
+      h("div", { class: "row" }, field("A"), field("B"), field("C")),
+      h("p", { class: "small muted" }, "Wörter mit Komma trennen, ε für das leere Wort. Beide Seiten werden sofort ausgerechnet."), res),
+    h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: check }, "Ist das ein Gegenbeispiel?")), out);
+  calc();
+}
+
+/* ------------------------------------------------------------------ Quantoren: Wörter einordnen */
+const QLANG = [
+  { def: "L₁ = {w ∈ Σ* | ∃u, v ∈ Σ*: w = uav}", inL: (w) => w.includes("a"), words: ["bab", "bb", "", "a", "bbbb", "ab"],
+    why: (w) => (w.includes("a") ? "u = „" + W(w.slice(0, w.indexOf("a"))) + "“, v = „" + W(w.slice(w.indexOf("a") + 1)) + "“" : "kein a in " + W(w) + " – für das a in uav gibt es keinen Platz"),
+    o: [{ t: "alle Wörter mit mindestens einem a", ok: true, why: "u ist der Teil vor einem a, v der Teil danach; beide dürfen leer sein. Nicht dabei sind genau ε, b, bb, …" },
+      { t: "alle Wörter, die mit a beginnen", why: "u darf nicht leer sein müssen: bab = b · a · b liegt in L₁." },
+      { t: "Σ*", why: "bb enthält kein a und liegt nicht in L₁." }] },
+  { def: "L₂ = {w ∈ Σ* | ∀u ∈ Σ*: wu = uw}", inL: (w) => w === "", words: ["", "a", "ab", "aa"],
+    why: (w) => { if (!w) return "εu = u = uε für jedes u"; const y = w[0] === "a" ? "b" : "a"; return "u = „" + y + "“: " + w + y + " ≠ " + y + w; },
+    o: [{ t: "{ε}", ok: true, why: "Für w ≠ ε sei x der erste Buchstabe; mit u = dem anderen Buchstaben beginnt wu mit x, uw aber nicht. Nur ε vertauscht mit allem." },
+      { t: "alle Wörter aus nur einem Buchstaben (aⁿ oder bⁿ)", why: "aa vertauscht nicht mit u = b: aab ≠ baa. Nur über einem einbuchstabigen Alphabet wäre das richtig." },
+      { t: "∅", why: "ε erfüllt die Bedingung: εu = u = uε." }] },
+  { def: "L₃ = {w ∈ Σ* | ∃u ∈ ΣΣ, ∃v ∈ Σ: w = uvuᴿ}", inL: (w) => w.length === 5 && w === rev(w), words: ["abbba", "ababb", "aba", "bbabb", "aaaaa", "abab"],
+    why: (w) => (w.length !== 5 ? "|uvuᴿ| ist immer 5, aber |" + W(w) + "| = " + w.length : w === rev(w) ? "u = „" + w.slice(0, 2) + "“, v = „" + w[2] + "“, uᴿ = „" + w.slice(3) + "“" : "die letzten zwei Zeichen sind nicht die ersten zwei rückwärts"),
+    o: [{ t: "alle Palindrome der Länge 5 (8 Stück)", ok: true, why: "u = xy, v = z, uᴿ = yx: w = xyzyx. Drei freie Buchstaben, also 2³ = 8 Wörter." },
+      { t: "alle Palindrome", why: "u hat genau Länge 2 und v Länge 1 – andere Längen sind ausgeschlossen (z. B. aba)." },
+      { t: "alle Wörter der Länge 5", why: "ababb ist kein Palindrom: Die letzten zwei Zeichen müssten „ba“ sein." }] },
+  { def: "L₄ = {w ∈ Σ* | ∃u ∈ Σ*, ∀v ∈ Σ*: uvw = vwu}", inL: () => true, words: ["ab", "", "bba", "a"],
+    why: () => "u = ε: dann uvw = vw = vwu für jedes v",
+    o: [{ t: "Σ* – es gibt kein Wort außerhalb", ok: true, why: "Wegen ∃u darfst du u = ε wählen; dann ist die Bedingung immer wahr. „wenn möglich“ in der Aufgabe deutet genau darauf hin." },
+      { t: "{ε}", why: "u = ε funktioniert für jedes w, nicht nur für w = ε." },
+      { t: "die Wörter, die mit u vertauschen", why: "u ist nicht fest vorgegeben – ∃u heißt, du darfst u wählen." }] },
+  { def: "L₅ = {w ∈ Σ* | ∃u ∈ Σ*: w = uu}", inL: (w) => w.length % 2 === 0 && w.slice(0, w.length / 2) === w.slice(w.length / 2), words: ["abab", "aa", "aba", "", "abba", "bb"],
+    why: (w) => (w.length % 2 ? "|uu| ist immer gerade, |" + W(w) + "| = " + w.length : w.slice(0, w.length / 2) === w.slice(w.length / 2) ? "u = „" + W(w.slice(0, w.length / 2)) + "“" : "erste Hälfte „" + w.slice(0, w.length / 2) + "“ ≠ zweite Hälfte „" + w.slice(w.length / 2) + "“"),
+    o: [{ t: "alle Wörter, deren erste Hälfte gleich der zweiten ist (Quadrate)", ok: true, why: "w = uu: gerade Länge, und beide Hälften sind u." },
+      { t: "alle Wörter gerader Länge", why: "abba hat gerade Länge, aber ab ≠ ba." },
+      { t: "alle Palindrome gerader Länge", why: "abba ist ein Palindrom, aber kein Quadrat; abab ist ein Quadrat, aber kein Palindrom." }] },
+  { def: "L₆ = {w ∈ Σ* | ∀u, v ∈ Σ*: w ≠ u bb v}", inL: (w) => !w.includes("bb"), words: ["abab", "abba", "b", "", "bbb", "aba"],
+    why: (w) => (w.includes("bb") ? "u = „" + W(w.slice(0, w.indexOf("bb"))) + "“, v = „" + W(w.slice(w.indexOf("bb") + 2)) + "“ ergibt w = u bb v" : "in " + W(w) + " steht nirgends bb"),
+    o: [{ t: "alle Wörter ohne das Teilwort bb", ok: true, why: "Für alle Zerlegungen ungleich u bb v heißt: bb kommt nirgends vor." },
+      { t: "alle Wörter mit höchstens einem b", why: "abab hat zwei b, aber nicht nebeneinander – liegt in L₆." },
+      { t: "alle Wörter, die nicht mit bb beginnen", why: "u darf beliebig sein: abba = a · bb · a liegt nicht in L₆." }] },
+];
+function wordsWidget(Q) {
+  return (card, api) => {
+    const D = api.data;
+    D.v = D.v || {};
+    const msg = h("div", { class: "stack" });
+    const row = h("div", { class: "row" }, Q.words.map((w) => {
+      const v = D.v[w];
+      return h("button", { class: "chip mono wordchip" + (v === "in" ? " in" : v === "out" ? " out" : ""), type: "button", disabled: api.solved,
+        onclick: () => { D.v[w] = v === "in" ? "out" : v === "out" ? undefined : "in"; api.redraw(); } },
+        W(w) + (v === "in" ? " ∈" : v === "out" ? " ∉" : " ?"));
+    }));
+    card.append(h("p", { class: "answer" }, Q.def + ", Σ = {a, b}"), row,
+      api.solved ? h("ul", { class: "small" }, Q.words.map((w) => h("li", null, W(w) + (Q.inL(w) ? " ∈: " : " ∉: ") + Q.why(w)))) : null,
+      api.solved ? null : h("div", { class: "row" }, h("span", { class: "small muted" }, "Antippen: ? → ∈ → ∉"), h("button", { class: "btn", type: "button", onclick: () => {
+        const open = Q.words.filter((w) => !D.v[w]);
+        if (open.length) { msg.replaceChildren(h("p", { class: "small" }, open.length === 1 ? "Ordne noch ein Wort ein." : "Ordne noch " + open.length + " Wörter ein.")); return; }
+        const wrong = Q.words.filter((w) => (D.v[w] === "in") !== Q.inL(w));
+        if (!wrong.length) { api.solve(); return; }
+        api.fail();
+        msg.replaceChildren(fb("bad", wrong.length + " falsch eingeordnet", h("ul", null, wrong.map((w) => h("li", null, W(w) + " liegt " + (Q.inL(w) ? "in" : "nicht in") + " der Sprache: " + Q.why(w))))));
+      } }, "Prüfen")), msg);
+  };
+}
+const quantSteps = (Qs) => Qs.flatMap((Q) => {
+  const n = Q.def.slice(0, 2);
+  return [
+    { role: n + " · Wörter", q: "Liegen die Wörter in " + n + "? Zum Nachweis „∈“ bei ∃ genügt ein passendes u, zum Nachweis „∉“ bei ∀ ein Gegen-u.", widget: wordsWidget(Q), add: Q.def },
+    { role: n + " · einfach beschreiben", q: "Wie lässt sich " + n + " einfach beschreiben?", o: Q.o, add: n + " = " + Q.o.find((x) => x.ok).t + "." },
+  ];
+});
+
+/* ------------------------------------------------------------------ Ableiten */
+function deriveWidget(rules, target) {
+  return (card, api) => {
+    const D = api.data;
+    D.hist = D.hist || ["S"];
+    const cur = D.hist[D.hist.length - 1];
+    const apply = (A, r) => { const i = cur.indexOf(A); if (i < 0) return; D.hist.push(cur.slice(0, i) + r + cur.slice(i + 1)); api.redraw(); };
+    const done = cur === target, dead = !/[A-Z]/.test(cur) && !done;
+    const prefix = cur.replace(/[A-Z].*$/, ""), off = !done && !target.startsWith(prefix);
+    if (done && !api.solved) setTimeout(() => api.solve(), 0);
+    card.append(h("p", { class: "answer" }, "Ziel: ", h("b", { class: "mono" }, target)),
+      h("p", { class: "wordview" }, D.hist.map(W).join(" ⊢ ")),
+      api.solved ? null : h("div", { class: "row" }, rules.map(([A, r]) => h("button", { class: "btn", type: "button", disabled: !cur.includes(A), onclick: () => apply(A, r) }, A + " → " + W(r))),
+        h("button", { class: "btn ghost", type: "button", disabled: D.hist.length < 2, onclick: () => { D.hist.pop(); api.redraw(); } }, "↶ Schritt zurück")),
+      dead || off ? h("p", { class: "small bad-t" }, dead ? "Fertig abgeleitet, aber nicht das Zielwort – geh einen Schritt zurück." : "Der Anfang „" + prefix + "“ passt schon nicht mehr zu " + target + ".") : null);
+  };
+}
+function memberWidget(card, api) {
+  const D = api.data;
+  D.v = D.v || {};
+  const W4 = [["", "in"], ["aabb", "in"], ["abab", "ord"], ["aabbb", "cnt"]];
+  const OPTS = [["in", "∈ L(G)"], ["ord", "∉: ein b steht vor einem a"], ["cnt", "∉: #a ≠ #b"]];
+  const msg = h("div");
+  card.append(h("div", { class: "stack" }, W4.map(([w]) => h("div", { class: "row" }, h("b", { class: "mono", style: "min-width:56px" }, W(w)),
+    OPTS.map(([k, l]) => h("button", { class: "chip" + (D.v[w] === k ? " on" : ""), type: "button", disabled: api.solved, onclick: () => { D.v[w] = k; api.redraw(); } }, l))))),
+  api.solved ? null : h("div", { class: "row" }, h("button", { class: "btn", type: "button", onclick: () => {
+    const wrong = W4.filter(([w, k]) => D.v[w] !== k);
+    if (!wrong.length) { api.solve(); return; }
+    api.fail();
+    msg.replaceChildren(fb("bad", wrong.length + " noch nicht richtig", h("ul", null, wrong.map(([w, k]) => h("li", null, W(w) + ": " + (k === "in" ? "liegt in L(G) – leite es ab." : k === "ord" ? "#a = #b stimmt, aber die Reihenfolge nicht: In aⁿSbⁿ stehen alle a links von S, alle b rechts." : "Die Reihenfolge stimmt, aber jede Regel erzeugt gleich viele a wie b – hier 2 a und 3 b."))))));
+  } }, "Prüfen")), msg);
+}
+
+/* ------------------------------------------------------------------ Grammatik bauen */
+function parseGrammar(text, sigma) {
+  const P = [], errs = [];
+  for (const raw of String(text).split(/\n|;/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const m = line.match(/^([A-Z])\s*(?:->|→|::=|=)\s*(.*)$/);
+    if (!m) { errs.push("„" + line + "“: erwartet wird „S → …“ mit genau einer Variable links."); continue; }
+    for (let alt of m[2].split("|")) {
+      alt = alt.replace(/\s+/g, "").replace(/ε|eps/g, "");
+      const bad = [...new Set([...alt].filter((c) => !/[A-Z]/.test(c) && !sigma.includes(c)))];
+      if (bad.length) errs.push("„" + (alt || "ε") + "“: " + bad.join(", ") + " ist weder in Σ noch eine Variable (Variablen: Großbuchstaben).");
+      else P.push([m[1], alt]);
+    }
+  }
+  if (!errs.length && !P.some(([A]) => A === "S")) errs.push("Es fehlt eine Regel für die Startvariable S.");
+  return { P, errs };
+}
+function generate(P, max) {   // Linksableitungen bis Länge max; parent für die Ableitung
+  const by = {};
+  for (const [A, r] of P) (by[A] = by[A] || []).push(r);
+  const words = new Set(), parent = new Map([["S", null]]), queue = ["S"];
+  let steps = 0;
+  while (queue.length && steps++ < 80000) {
+    const f = queue.shift(), i = f.search(/[A-Z]/);
+    if (i < 0) { words.add(f); continue; }
+    for (const r of by[f[i]] || []) {
+      const g = f.slice(0, i) + r + f.slice(i + 1), term = g.replace(/[A-Z]/g, "").length;
+      if (term > max || g.length - term > max + 4 || parent.has(g)) continue;
+      parent.set(g, f); queue.push(g);
+    }
+  }
+  const path = (w) => { const out = []; for (let x = w; x != null; x = parent.get(x)) out.unshift(x); return out; };
+  return { words, path, complete: !queue.length };
+}
+function grammarType(P) {
+  const rhsHasS = P.some(([, r]) => r.includes("S"));
+  const t3 = P.every(([A, r]) => /^[^A-Z]$/.test(r) || /^[^A-Z][A-Z]$/.test(r) || (r === "" && A === "S" && !rhsHasS));
+  const bad = P.find(([A, r]) => !(/^[^A-Z]$/.test(r) || /^[^A-Z][A-Z]$/.test(r) || (r === "" && A === "S" && !rhsHasS)));
+  return t3 ? "Typ 3 (regulär): jede Regel hat die Form A → a oder A → aB." : "Typ 2 (kontextfrei): links steht immer genau eine Variable. Nicht Typ 3 wegen „" + bad[0] + " → " + W(bad[1]) + "“.";
+}
+const GRAM = [
+  { id: "anb2n", title: "aⁿb²ⁿ (Blatt 1 · A5 (4))", kap: 2, lang: "{aⁿb²ⁿ | n ∈ ℕ}", sigma: ["a", "b"], max: 9, inL: (w) => /^a*b*$/.test(w) && 2 * cnt(w, "a") === cnt(w, "b"),
+    hint: "Wie S → aSb | ε für aⁿbⁿ – nur entstehen pro a jetzt zwei b.", sol: "S → aSbb | ε" },
+  { id: "anbn1", title: "aⁿbⁿ mit n ≥ 1", kap: 2, lang: "{aⁿbⁿ | n ≥ 1}", sigma: ["a", "b"], max: 10, inL: (w) => /^a+b+$/.test(w) && cnt(w, "a") === cnt(w, "b"),
+    hint: "Der kürzeste Fall ist ab – nimm ihn als Abbruch statt ε.", sol: "S → aSb | ab" },
+  { id: "endb", title: "Endet auf b (regulär)", kap: 2, lang: "{w ∈ {a, b}* | w endet auf b}", sigma: ["a", "b"], max: 7, inL: (w) => w.endsWith("b"),
+    hint: "Regulär (Typ 3): Lies Zeichen für Zeichen von links, am Ende ein b.", sol: "S → aS | bS | b" },
+  { id: "anbm", title: "aⁿbᵐ mit m ≥ n", kap: 2, lang: "{aⁿbᵐ | m ≥ n ≥ 0}", sigma: ["a", "b"], max: 9, inL: (w) => /^a*b*$/.test(w) && cnt(w, "b") >= cnt(w, "a"),
+    hint: "Paare a…b wie bei aⁿbⁿ, dazu beliebig viele zusätzliche b.", sol: "S → aSb | B,  B → bB | ε" },
+  { id: "pal", title: "Palindrome", kap: 2, lang: "Palindrome über {a, b} (w = wᴿ)", sigma: ["a", "b"], max: 8, inL: (w) => w === rev(w),
+    hint: "Außen gleiche Buchstaben, innen ein kürzeres Palindrom; in der Mitte ε, a oder b.", sol: "S → aSa | bSb | a | b | ε" },
+  { id: "gleich", title: "Gleich viele a und b", kap: 2, lang: "{w ∈ {a, b}* | #a(w) = #b(w)}", sigma: ["a", "b"], max: 8, inL: (w) => cnt(w, "a") === cnt(w, "b"),
+    hint: "Zerlege nach dem ersten Zeichen: Beginnt w mit a, gibt es ein passendes b, davor und danach je ein ausgeglichenes Wort.", sol: "S → aSbS | bSaS | ε" },
+];
+const gramDrafts = {};
+function grammarTask(view, G, key) {
+  const S = gramDrafts[G.id] || (gramDrafts[G.id] = { text: "" });
+  const out = h("div", { class: "stack" });
+  const ta = h("textarea", { class: "code gram", rows: 4, placeholder: "S → aSb | ε\n(→ oder ->, Alternativen mit |, ε oder leer)", "aria-label": "Produktionen", autocapitalize: "off", spellcheck: "false", oninput: (e) => { S.text = e.target.value; } });
+  ta.value = S.text;
+  const check = () => {
+    out.replaceChildren();
+    const g = parseGrammar(S.text, G.sigma);
+    if (g.errs.length) { out.append(fb("bad", "Grammatik nicht lesbar", h("ul", null, g.errs.map((e) => h("li", null, e))))); return; }
+    const gen = generate(g.P, G.max);
+    for (const w of allWords(G.sigma, G.max)) {
+      const a = gen.words.has(w), b = G.inL(w);
+      if (a === b) continue;
+      Progress.record(key, false);
+      out.append(fb("bad", a ? "Deine Grammatik erzeugt „" + W(w) + "“" : "„" + W(w) + "“ wird nicht erzeugt",
+        h("p", null, a ? "Das Wort gehört aber nicht zu L." : "Es gehört aber zu L." + (gen.complete ? "" : " (Suche nach " + G.max + " Zeichen abgebrochen – vereinfache die Grammatik.)")),
+        a ? h("p", { class: "small mono" }, gen.path(w).map(W).join(" ⊢ ")) : null));
+      return;
+    }
+    Progress.record(key, true);
+    out.append(fb("ok", "Richtig für alle Wörter bis Länge " + G.max + "!", h("p", null, grammarType(g.P)),
+      h("p", { class: "small" }, "Für die Abgabe noch begründen: Invariante der Satzformen (was jede Regel erhält) und dass jedes Wort aus L erzeugt wird."),
+      h("details", null, h("summary", null, "Eine mögliche Lösung"), h("p", { class: "mono" }, G.sol))));
+  };
+  view.append(theory("<b>Grammatik</b> G = (V, Σ, P, S): Variablen V (hier Großbuchstaben), Terminale Σ, Produktionen P (links mindestens eine Variable), Startvariable S. <b>L(G)</b> = {w ∈ Σ* | S ⊢* w}.<br><b>Typ 2</b> (kontextfrei): links genau eine Variable. <b>Typ 3</b> (regulär): A → a oder A → aB (S → ε, wenn S rechts nie vorkommt).<br><b>Idee für Verhältnisse</b>: Was zusammenpassen muss, entsteht in derselben Regel (S → aSb erzeugt je ein a und ein b)."),
+    h("div", { class: "card task" }, h("div", { class: "eyebrow" }, "Sprache"), h("p", { class: "answer" }, "L = " + G.lang), h("p", { class: "small muted" }, "Σ = {" + G.sigma.join(", ") + "}. Geprüft wird exakt: alle Wörter bis Länge " + G.max + " – erzeugt deine Grammatik genau die aus L?"),
+      ta, h("details", null, h("summary", null, "Tipp"), h("p", { class: "small" }, G.hint))),
+    h("div", { class: "row" }, h("button", { class: "btn primary", type: "button", onclick: check }, "Prüfen")), out);
+}
+
+/* ------------------------------------------------------------------ Schritt-Aufgaben */
+const ORD_O = (ok, why) => [["Äquivalenzrelation", "aequi"], ["Halbordnung, aber nicht linear", "halb"], ["lineare Ordnung", "lin"], ["nichts davon", "keins"]]
+  .map(([t, k]) => ({ t, ok: k === ok, why: k === ok ? why : { aequi: "Dafür müsste sie symmetrisch sein.", halb: "Prüfe Antisymmetrie und Vergleichbarkeit noch einmal.", lin: "Dafür müssten je zwei Elemente vergleichbar sein (und sie eine Halbordnung).", keins: "Prüfe die drei Eigenschaften noch einmal – eine Einordnung passt." }[k] }));
+const B1_STEPS = {
+  ord: { goal: "Ordne die Relationen ein (Blatt 1, A1 (3) und mehr). Eine <b>lineare Ordnung</b> ist eine Halbordnung, in der je zwei Elemente vergleichbar sind.",
+    steps: [
+      { role: "Blatt 1", q: "T = {(x, y) ∈ M × M | x teilt y} auf M = {1, 2, 3, 4}", o: ORD_O("halb", "reflexiv (x | x), antisymmetrisch (x | y und y | x ⇒ x = y bei positiven Zahlen), transitiv. Nicht symmetrisch: 1 | 2, aber nicht 2 | 1. Nicht linear: 2 und 3 sind unvergleichbar."), add: "Teilbarkeit auf {1, 2, 3, 4}: Halbordnung, nicht linear (2, 3 unvergleichbar)." },
+      { role: "≤", q: "≤ auf {1, 2, 3, 4}", o: ORD_O("lin", "reflexiv, antisymmetrisch, transitiv – und je zwei Zahlen sind vergleichbar."), add: "≤ auf {1, 2, 3, 4}: lineare Ordnung." },
+      { role: "<", q: "< auf ℕ", o: ORD_O("keins", "Nicht reflexiv (1 < 1 gilt nicht). Halbordnungen sind in der VL reflexiv – < ist eine „strikte“ Ordnung."), add: "< auf ℕ: nichts davon (nicht reflexiv)." },
+      { role: "mod 3", q: "x ~ y :⇔ x − y ist durch 3 teilbar, auf ℤ", o: ORD_O("aequi", "reflexiv (0 ist durch 3 teilbar), symmetrisch, transitiv (Summe zweier Vielfacher von 3). Drei Klassen: Rest 0, 1, 2."), add: "≡ mod 3: Äquivalenzrelation mit drei Klassen." },
+      { role: "⊆", q: "⊆ auf 𝒫({1, 2})", o: ORD_O("halb", "reflexiv, antisymmetrisch (M ⊆ N und N ⊆ M ⇒ M = N), transitiv. Nicht linear: {1} und {2} sind unvergleichbar."), add: "⊆ auf 𝒫({1, 2}): Halbordnung, nicht linear." },
+      { role: "Länge", q: "u ~ v :⇔ |u| = |v|, auf {a, b}*", o: ORD_O("aequi", "Gleichheit der Länge ist reflexiv, symmetrisch und transitiv. Die Klassen sind Σ⁰, Σ¹, Σ², …"), add: "gleiche Länge: Äquivalenzrelation (Klassen Σⁿ)." },
+      { role: "Präfix", q: "u ≤ v :⇔ u ist Präfix von v, auf {a, b}*", o: ORD_O("halb", "reflexiv (u = u·ε), antisymmetrisch, transitiv. Nicht linear: a und b sind unvergleichbar."), add: "Präfix-Relation: Halbordnung, nicht linear." },
+      { role: "Falle", q: "x teilt y, auf ℤ ∖ {0}", o: ORD_O("keins", "Nicht antisymmetrisch: 1 | −1 und −1 | 1, aber 1 ≠ −1. Nicht symmetrisch: 1 | 2, aber nicht 2 | 1. Auf positiven Zahlen wäre es eine Halbordnung."), add: "Teilbarkeit auf ℤ ∖ {0}: nichts davon (1 | −1 und −1 | 1)." },
+    ],
+    summary: "Erst die drei Eigenschaften prüfen (reflexiv, symmetrisch bzw. antisymmetrisch, transitiv), dann einordnen. Für „nicht linear“ zwei unvergleichbare Elemente nennen, für jede verletzte Eigenschaft ein Gegenbeispiel." },
+  beweis: { goal: "Zeige (A ∪ B) ∘ C = (A ∘ C) ∪ (B ∘ C) für Sprachen A, B, C über Σ (Blatt 1, A3 (1)). Wähle zu jedem Schritt der Äquivalenzkette die Begründung.",
+    steps: [
+      { role: "1", q: "w ∈ (A ∪ B) ∘ C ⇔ ∃x ∈ A ∪ B, y ∈ C: w = xy", o: [{ t: "Definition der Konkatenation", ok: true, why: "L₁ ∘ L₂ = {w₁w₂ | w₁ ∈ L₁, w₂ ∈ L₂}." }, { t: "Distributivgesetz", why: "Hier wird nur die Definition von ∘ eingesetzt." }, { t: "∃ verteilt sich über ∨", why: "Noch steht kein ∨ da." }], add: "w ∈ (A ∪ B) ∘ C ⇔ ∃x ∈ A ∪ B, y ∈ C: w = xy (Def. ∘)" },
+      { role: "2", q: "⇔ ∃x, y: (x ∈ A ∨ x ∈ B) ∧ y ∈ C ∧ w = xy", o: [{ t: "Definition der Vereinigung", ok: true, why: "x ∈ A ∪ B ⇔ x ∈ A ∨ x ∈ B." }, { t: "Definition der Konkatenation", why: "∘ ist schon aufgelöst; jetzt wird ∪ aufgelöst." }, { t: "Kommutativität", why: "Es wird nichts vertauscht." }], add: "⇔ ∃x, y: (x ∈ A ∨ x ∈ B) ∧ y ∈ C ∧ w = xy (Def. ∪)" },
+      { role: "3", q: "⇔ ∃x, y: (x ∈ A ∧ y ∈ C ∧ w = xy) ∨ (x ∈ B ∧ y ∈ C ∧ w = xy)", o: [{ t: "Distributivgesetz (P ∨ Q) ∧ R ≡ (P ∧ R) ∨ (Q ∧ R)", ok: true, why: "Reine Aussagenlogik innerhalb des Quantors." }, { t: "∃ verteilt sich über ∨", why: "Der Quantor steht noch außen; erst im nächsten Schritt wird er verteilt." }], add: "⇔ ∃x, y: (x ∈ A ∧ y ∈ C ∧ w = xy) ∨ (x ∈ B ∧ y ∈ C ∧ w = xy) (Distributivgesetz)" },
+      { role: "4", q: "⇔ (∃x ∈ A, y ∈ C: w = xy) ∨ (∃x ∈ B, y ∈ C: w = xy)", o: [{ t: "∃ verteilt sich über ∨", ok: true, why: "„Es gibt eine Zerlegung mit P oder Q“ heißt dasselbe wie „es gibt eine mit P oder es gibt eine mit Q“." }, { t: "∃ verteilt sich über ∧", why: "Das gilt eben nicht – genau daran scheitert Teil 2 des Blatts." }], add: "⇔ (∃x ∈ A, y ∈ C: w = xy) ∨ (∃x ∈ B, y ∈ C: w = xy) (∃ über ∨)" },
+      { role: "5", q: "⇔ w ∈ A ∘ C ∨ w ∈ B ∘ C ⇔ w ∈ (A ∘ C) ∪ (B ∘ C)", o: [{ t: "Definition der Konkatenation und der Vereinigung", ok: true, why: "Rückwärts gelesen wie Schritt 1 und 2." }, { t: "Assoziativität", why: "Es wird nicht umgeklammert." }], add: "⇔ w ∈ (A ∘ C) ∪ (B ∘ C). □" },
+      { role: "Ausblick", q: "Warum gilt die entsprechende Gleichung mit ∩ statt ∪ nicht?", o: [{ t: "Aus ∃x: (P(x) ∧ Q(x)) folgt (∃x: P(x)) ∧ (∃x: Q(x)), aber nicht umgekehrt", ok: true, why: "Ein Wort kann in A ∘ B und A ∘ C mit verschiedenen Zerlegungen liegen. Probier es in „Gegenbeispiel bauen“ aus." }, { t: "Weil ∩ nicht kommutativ ist", why: "∩ ist kommutativ – daran liegt es nicht." }], add: "Mit ∩ gilt nur ⊆, weil sich ∃ nicht über ∧ verteilt." },
+    ],
+    summary: "Für ein beliebiges Wort w: Definition von ∘ und ∪ einsetzen, das Distributivgesetz anwenden und den Existenzquantor über das „oder“ verteilen – dann rückwärts wieder zu (A ∘ C) ∪ (B ∘ C) zusammenfassen. Mit ∩ geht das nicht, weil sich ∃ nicht über ∧ verteilt." },
+  quant: { goal: "Blatt 1, A4: Σ = {a, b}. Beschreibe die Sprachen einfach und ordne Wörter ein. <b>∃u</b>: du darfst u wählen. <b>∀u</b>: es muss für jedes u gelten. Bei <b>∃u ∀v</b> legst du u einmal fest, bevor v beliebig kommt.",
+    steps: quantSteps(QLANG.slice(0, 4)),
+    summary: "L₁: mindestens ein a. L₂ = {ε} (für w ≠ ε stört u = der andere Buchstabe). L₃: die 8 Palindrome der Länge 5. L₄ = Σ* (u = ε), es gibt kein Wort außerhalb. Bei jedem „∈“ die Zeugen u, v nennen, bei jedem „∉“ begründen, warum keine Wahl passt." },
+  quant2: { goal: "Zwei weitere Sprachen mit Quantoren, Σ = {a, b}.", steps: quantSteps(QLANG.slice(4)),
+    summary: "L₅ sind die Quadrate uu – gerade Länge, gleiche Hälften. L₆ sind die Wörter ohne bb: „für alle Zerlegungen ≠ u bb v“ heißt, bb kommt nirgends vor." },
+  abl: { goal: "Blatt 1, A5: G = ({S}, {a, b}, {S → aSb, S → ε}, S).",
+    steps: [
+      { role: "Ableitung", q: "Leite aaabbb ab: Tippe die Regel, die angewendet werden soll.", widget: deriveWidget([["S", "aSb"], ["S", ""]], "aaabbb"), why: "3 × S → aSb, dann S → ε.", add: "S ⊢ aSb ⊢ aaSbb ⊢ aaaSbbb ⊢ aaabbb" },
+      { role: "Invariante", q: "Welche Form haben alle aus S ableitbaren Satzformen?", o: [{ t: "aⁿSbⁿ oder aⁿbⁿ (n ≥ 0)", ok: true, why: "Induktion: Am Anfang S = a⁰Sb⁰; S → aSb macht daraus aⁿ⁺¹Sbⁿ⁺¹, S → ε macht aⁿbⁿ." }, { t: "(ab)ⁿS", why: "S steht immer in der Mitte zwischen den a und den b." }, { t: "beliebige Wörter mit gleich vielen a und b", why: "Zu grob: abab hat gleich viele a und b, ist aber nicht ableitbar." }], add: "Invariante: Satzformen sind aⁿSbⁿ oder aⁿbⁿ." },
+      { role: "Wortproblem", q: "Gehören ε, aabb, abab, aabbb zu L(G)? Begründe die negativen Antworten.", widget: memberWidget, why: "ε und aabb lassen sich ableiten. abab scheitert an der Reihenfolge, aabbb an der Anzahl – beides folgt aus der Invariante.", add: "ε, aabb ∈ L(G); abab ∉ (b vor a); aabbb ∉ (#a ≠ #b)." },
+      { role: "L(G)", q: "Wie lautet L(G) in Mengenschreibweise (ℕ mit 0, wie auf dem Blatt)?", o: [{ t: "{aⁿbⁿ | n ∈ ℕ}", ok: true, why: "⊆ aus der Invariante, ⊇ durch n-mal S → aSb und dann S → ε. Mit n = 0 ist ε dabei." }, { t: "{aⁿbⁿ | n ≥ 1}", why: "S → ε direkt liefert ε, also n = 0." }, { t: "{w | #a(w) = #b(w)}", why: "abab hat gleich viele a und b, liegt aber nicht in L(G)." }], add: "L(G) = {aⁿbⁿ | n ∈ ℕ}." },
+      { role: "Typ", q: "Welchen Chomsky-Typ hat G?", o: [{ t: "Typ 2, nicht Typ 3", ok: true, why: "Links steht nur S (Typ 2). Typ 3 verlangt A → a oder A → aB; in aSb steht die Variable in der Mitte." }, { t: "Typ 3", why: "In S → aSb steht nach der Variable noch ein Terminal – das erlaubt Typ 3 nicht." }, { t: "Typ 1, nicht Typ 2", why: "Jede linke Seite ist genau eine Variable, das ist schon Typ 2." }], add: "G ist vom Typ 2 (kontextfrei), nicht Typ 3." },
+    ],
+    summary: "Ableitung: dreimal S → aSb, dann S → ε. Alle Satzformen haben die Form aⁿSbⁿ bzw. aⁿbⁿ (Induktion über die Schritte) – daraus folgen die negativen Antworten: abab hat ein b vor einem a, aabbb ungleich viele a und b. Also L(G) = {aⁿbⁿ | n ∈ ℕ}; G ist kontextfrei. Für {aⁿb²ⁿ} wird S → aSbb daraus." },
+  begriffe: { goal: "Grundbegriffe aus Kapitel 1 und 2 – die kommen in der mündlichen Prüfung gern als Einstieg.",
+    steps: [
+      { role: "Motivation", q: "Was heißt „algorithmisch unlösbar“?", o: [{ t: "Es ist bewiesen, dass kein Algorithmus existieren kann", ok: true, why: "Nicht „noch keiner gefunden“ – z. B. das Halteproblem (Turing 1936)." }, { t: "Bisher hat niemand einen Algorithmus gefunden", why: "Das wäre „ungelöst“, nicht „unlösbar“." }, { t: "Jeder Algorithmus braucht exponentiell viel Zeit", why: "Das ist „praktisch unlösbar“ (nicht effizient lösbar)." }], add: "Unlösbar: Es gibt beweisbar keinen Algorithmus. Praktisch unlösbar: lösbar, aber nicht effizient." },
+      { role: "Σ⁰", q: "Was ist Σ⁰?", o: [{ t: "{ε}", ok: true, why: "Genau ein Wort der Länge 0: das leere Wort." }, { t: "∅", why: "Σ⁰ ist nicht leer – es enthält ε." }, { t: "Σ", why: "Das ist Σ¹." }], add: "Σ⁰ = {ε}, Σ* = ⋃ Σⁱ." },
+      { role: "ε", q: "Ist ε ∈ Σ?", o: [{ t: "Nein – ε ist ein Wort (der Länge 0), kein Zeichen", ok: true, why: "Σ enthält Zeichen; ε ∈ Σ* (genauer ε ∈ Σ⁰)." }, { t: "Ja, in jedem Alphabet", why: "ε ist kein Zeichen aus Σ." }], add: "ε ∉ Σ, aber ε ∈ Σ*." },
+      { role: "∅ und {ε}", q: "Was ist L ∘ ∅ – und was L ∘ {ε}?", o: [{ t: "L ∘ ∅ = ∅ und L ∘ {ε} = L", ok: true, why: "Mit ∅ gibt es kein w₂ zum Anhängen; ε ist neutral." }, { t: "L ∘ ∅ = L und L ∘ {ε} = L", why: "∅ ist nicht neutral: Es gibt kein Wort, das man anhängen könnte." }, { t: "beides {ε}", why: "Ausrechnen: {w₁w₂ | w₁ ∈ L, w₂ ∈ ∅} = ∅." }], add: "L ∘ ∅ = ∅, L ∘ {ε} = L, L⁰ = {ε} (auch für L = ∅)." },
+      { role: "Anzahl", q: "Wie viele formale Sprachen gibt es über Σ = {a}?", o: [{ t: "überabzählbar viele", ok: true, why: "Σ* ist abzählbar unendlich, Sprachen sind Teilmengen von Σ* – die Potenzmenge ist überabzählbar." }, { t: "abzählbar unendlich viele", why: "Das gilt für Wörter, nicht für Sprachen." }, { t: "endlich viele", why: "Schon {aⁿ} für jedes n ist eine andere Sprache." }], add: "Abzählbar viele Wörter, überabzählbar viele Sprachen." },
+      { role: "Relationen", q: "Kann eine Relation symmetrisch und antisymmetrisch zugleich sein?", o: [{ t: "Ja – wenn sie nur Paare (x, x) enthält", ok: true, why: "Antisymmetrie verbietet Hin-und-zurück-Paare mit x ≠ y, Symmetrie verlangt sie. Beides geht nur ohne solche Paare." }, { t: "Nein, nie", why: "Die Identität {(x, x)} ist beides." }], add: "Symmetrisch und antisymmetrisch ⇔ nur Diagonalpaare." },
+      { role: "Grammatik", q: "Was muss auf der linken Seite jeder Produktion stehen?", o: [{ t: "mindestens eine Variable", ok: true, why: "P ⊆ (V ∪ Σ)* × (V ∪ Σ)*, links mindestens eine Variable. Genau eine Variable ist erst die Bedingung für Typ 2." }, { t: "genau eine Variable", why: "Das verlangt erst Typ 2 (kontextfrei)." }, { t: "die Startvariable S", why: "Regeln gibt es für alle Variablen." }], add: "Grammatik G = (V, Σ, P, S): links jeder Regel mindestens eine Variable." },
+      { role: "Typen", q: "Eine Typ-2-Grammatik erzeugt eine Sprache L. Welchen Typ hat L?", o: [{ t: "mindestens Typ 2 – vielleicht auch Typ 3, wenn es eine reguläre Grammatik für L gibt", ok: true, why: "Sprach-Typ ≠ Grammatik-Typ: Eine Sprache ist vom Typ k, wenn es irgendeine Grammatik vom Typ k für sie gibt." }, { t: "genau Typ 2", why: "S → aS | ε ist Typ 3, aber auch Typ 2 – und erzeugt eine reguläre Sprache." }], add: "Grammatik-Typ ≠ Sprach-Typ." },
+    ],
+    summary: "Unlösbar heißt beweisbar ohne Algorithmus. Σ⁰ = {ε}, ε ist ein Wort und kein Zeichen, L ∘ ∅ = ∅ und L ∘ {ε} = L. Es gibt abzählbar viele Wörter, aber überabzählbar viele Sprachen. Grammatiken haben links mindestens eine Variable; der Typ einer Sprache ist der beste Typ irgendeiner Grammatik für sie." },
+};
+
+const B1_TASKS = [
+  { id: "rel", title: "Relation prüfen (A1.1)", kap: 1, hint: "Eigenschaften mit Gegenbeispielen, danach neue Relationen" },
+  { id: "hull", title: "Zur Äquivalenzrelation ergänzen (A1.2)", kap: 1, hint: "minimal ergänzen in der Matrix" },
+  { id: "ord", title: "Halbordnung, Äquivalenz oder linear? (A1.3)", kap: 1, hint: "Teilbarkeit und 7 weitere Relationen" },
+  { id: "pot", title: "Sprachpotenzen Lⁿ (A2)", kap: 1, hint: "L², |L³|, |Lⁿ| – auch für neue Sprachen" },
+  { id: "beweis", title: "Beweis: (A ∪ B) ∘ C (A3.1)", kap: 1, hint: "Äquivalenzkette begründen" },
+  { id: "konk", title: "Gegenbeispiel bauen (A3.2)", kap: 1, hint: "A, B, C eingeben, beide Seiten werden ausgerechnet" },
+  { id: "quant", title: "Sprachen mit Quantoren (A4)", kap: 1, hint: "Wörter einordnen, Sprache beschreiben" },
+  { id: "quant2", title: "Quantoren – zwei weitere Sprachen", kap: 1, hint: "Quadrate uu, ohne bb" },
+  { id: "abl", title: "Ableiten und L(G) (A5.1–3)", kap: 2, hint: "Regeln antippen, Wortproblem, Mengenschreibweise" },
+  { id: "anb2n", title: "Grammatik für aⁿb²ⁿ (A5.4)", kap: 2, hint: "Regeln eintippen, exakte Prüfung" },
+  { id: "begriffe", title: "Begriffe aus Kap. 1–2", kap: 1, hint: "Σ⁰, ε, ∅, Anzahl der Sprachen, Grammatik-Typen" },
+];
+App.register({
+  id: "blatt1", title: "Übungsblatt 1", chapter: "Kap. 1–2", desc: "Relationen, Sprachpotenzen, Quantoren, Ableitungen – wie auf Blatt 1, dazu neue Beispiele",
+  intro: "Die Aufgaben von Blatt 1 (WS 26/27) zum Üben: erst mit den Zahlen vom Blatt, danach mit neuen. Oben in jeder Aufgabe steht eingeklappt die Theorie dazu.",
+  tasks: B1_TASKS,
+  renderTask(view, t) {
+    taskHead(view, this, t, null);
+    if (t.id === "rel") relTask(view, t);
+    else if (t.id === "hull") hullTask(view, t);
+    else if (t.id === "pot") potTask(view, t);
+    else if (t.id === "konk") konkTask(view, t);
+    else if (t.id === "anb2n") grammarTask(view, GRAM[0], "blatt1:anb2n");
+    else {
+      const R = B1_STEPS[t.id];
+      if (t.id === "quant" || t.id === "quant2") view.append(theory("<b>∃u</b> („es gibt ein u“): Für „w ∈ L“ genügt <i>ein</i> passendes u. <b>∀u</b> („für alle u“): Für „w ∉ L“ genügt <i>ein</i> Gegen-u. ε ist ein erlaubtes Wort. ΣΣ = Σ² sind die Wörter der Länge 2, uᴿ ist u rückwärts."));
+      if (t.id === "ord") view.append(theory(T_REL));
+      if (t.id === "beweis") view.append(theory("<b>Konkatenation</b> A ∘ C = {xy | x ∈ A, y ∈ C}. <b>Mengengleichheit</b> zeigt man für ein beliebiges Wort w per Äquivalenzkette (oder ⊆ und ⊇). Logik: (P ∨ Q) ∧ R ≡ (P ∧ R) ∨ (Q ∧ R); ∃x: (P ∨ Q) ≡ (∃x: P) ∨ (∃x: Q), aber ∃x: (P ∧ Q) ⇒ (∃x: P) ∧ (∃x: Q) nur in eine Richtung."));
+      if (t.id === "abl") view.append(theory("<b>Ableitung</b> ⊢: genau eine Regel auf ein Vorkommen ihrer linken Seite anwenden. Fertig, wenn nur Terminale dastehen. <b>w ∈ L(G)</b> zeigt man mit einer Ableitung, <b>w ∉ L(G)</b> mit einer Invariante, die S hat und jede Regel erhält (Induktion)."));
+      renderSteps(view, "blatt1:" + t.id, R);
+    }
+  },
+});
+
+App.register({
+  id: "gram", title: "Grammatik bauen", chapter: "Kap. 2", desc: "Produktionen eintippen, exakt geprüft bis Länge 8–10",
+  intro: "Schreib eine Grammatik für die Sprache – Regeln wie „S → aSb | ε“. Der Trainer erzeugt alle Wörter bis zu einer festen Länge und vergleicht sie mit der Sprache; bei einem Fehler siehst du das Wort und seine Ableitung.",
+  tasks: GRAM.slice(1).map((g) => ({ id: g.id, title: g.title, kap: g.kap, hint: g.lang })),
+  renderTask(view, t) {
+    taskHead(view, this, t, null);
+    grammarTask(view, GRAM.find((g) => g.id === t.id), "gram:" + t.id);
+  },
+});
+
+"use strict";
 /* Prüfungssimulation: Claude prüft 10–30 Minuten quer durch die Kapitel, hakt nach und gibt am Ende eine Notentendenz.
    Ohne Claude (lokale Vorschau, kein Zugriff): dieselben Fragen mit Selbstcheck an den Kernpunkten. */
 
@@ -3467,7 +4049,7 @@ App.register({
 /* Tagesmix (verteiltes Wiederholen bis zur Prüfung) und Übersicht mit Schwachstellen pro Kapitel. */
 
 const KAP_NAMES = { 1: "Grundlagen", 2: "Grammatiken, Chomsky-Hierarchie", 3: "Endliche Automaten", 4: "Pumping-Lemma, Myhill-Nerode, Minimierung", 5: "Kellerautomaten, kontextfreie Sprachen", 6: "Turingmaschinen, Berechenbarkeit", 7: "Halteproblem, Reduktion, Rice", 8: "Laufzeit, Landau, Mastertheorem", 9: "P, NP, EXP", 10: "Zusammenhänge" };
-const MOD_KAP = { dfa: 3, nfa: 3, min: 4, mn: 4, plreg: 4, plcf: 5, cyk: 5, pda: 5, tm: 6, red: 7, sortlang: 2, sortcomp: 7, master: 8, landau: 8, redp: 9 };
+const MOD_KAP = { blatt1: 1, gram: 2, dfa: 3, nfa: 3, min: 4, mn: 4, plreg: 4, plcf: 5, cyk: 5, pda: 5, tm: 6, red: 7, sortlang: 2, sortcomp: 7, master: 8, landau: 8, redp: 9 };
 const TASK_KAP = { "sortcomp:probleme": 9, "sortcomp:entscheidbar": 6, "sortcomp:folgerungen": 10 };
 const EXAM_DEFAULT = "2027-02-01";              // „Februar 2027“, genaues Datum in den Einstellungen
 const MIX_TASKS = 8, MIX_ORAL = 2;
